@@ -14,6 +14,9 @@ intents.message_content = True
 bot = discord.Client(intents=intents)
 channel_id = None
 
+# Alert <-> message mapping
+alert_store = {}
+
 @bot.event
 async def on_ready():
     global channel_id
@@ -23,15 +26,47 @@ async def on_ready():
             print(f"Bot online and ready to send messages to #{channel.name}")
             return
 
+# Handle commands from Discord replies
+def handle_command(original_msg_id, command):
+    if original_msg_id in alert_store:
+        alert = alert_store[original_msg_id]
+        del alert_store[original_msg_id]
+        print("Command recieved:")
+        print(f"Alert: {alert}")
+        print(f"Command: {command}")
+        # TODO: Todo: call wazuh api based on command and alert.
+    else:
+        print(f"No data for message ID: {original_msg_id}")
+
+# Receive message
+@bot.event
+async def on_message(message):
+    if message.author == bot.user:
+        return
+    
+    # check if reply
+    if message.reference and message.reference.message_id:
+        original_msg_id = str(message.reference.message_id)
+        
+        # Check if the original message was sent by the bot
+        try:
+            original_msg = await message.channel.fetch_message(message.reference.message_id)
+            if original_msg.author == bot.user:
+                handle_command(original_msg_id, message.content)
+        except:
+            pass
+
 def run_bot():
     bot.run(os.getenv('DISCORD_BOT_TOKEN'))
 
 # Send message
-async def send_discord_message(message):
+async def send_discord_message(message, alert_data=None):
     channel = bot.get_channel(channel_id)
-    await channel.send(message)
+    sent_msg = await channel.send(message)
     print(f"Discord message sent: {message}")
-
+    
+    if alert_data:
+        alert_store[str(sent_msg.id)] = alert_data
 
 ### FLASK ###
 app = Flask(__name__)
@@ -90,7 +125,7 @@ def format_alert(alert):
     
     if eventdata.get('groupName') or eventdata.get('targetUserName'):
         group = eventdata.get('groupName', eventdata.get('targetUserName', ''))
-        if group and group != eventdata.get('targetUserName'):  # Avoid duplicate
+        if group and group != eventdata.get('targetUserName'):
             message += f"**Group:** {group}\n"
     
     if win.get('system', {}).get('eventID'):
@@ -122,7 +157,7 @@ def webhook():
         message = format_alert(alert)
         #asyncio.create_task equivalent across threads
         asyncio.run_coroutine_threadsafe(
-            send_discord_message(message), 
+            send_discord_message(message, alert), 
             bot.loop
         )
     
