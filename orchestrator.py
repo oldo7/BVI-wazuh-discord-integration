@@ -38,7 +38,7 @@ app = Flask(__name__)
 # Request handling
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    # TODO: create message based on message
+    # TODO: create message based on messages
     alert = request.get_json()
     print("============ NEW ALERT ==========")
     print(alert)
