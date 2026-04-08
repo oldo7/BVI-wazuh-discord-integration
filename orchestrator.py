@@ -85,8 +85,7 @@ def handle_command(original_msg_id, command):
     cmd = command.strip().lower()
     rule_id = alert.get('rule', {}).get('id', '')
 
-    # Extract username for Windows commands (works for both local and remote)
-    username = alert.get('data', {}).get('dstuser', '')  # Linux: user being attacked
+    username = alert.get('data', {}).get('dstuser', '')
     if not username:
         username = alert.get('data', {}).get('win', {}).get('eventdata', {}).get('targetUserName', '') 
 
