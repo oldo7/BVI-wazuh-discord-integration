@@ -87,6 +87,11 @@ def handle_command(original_msg_id, command):
         dstuser = alert.get('data', {}).get('dstuser', '')
         if dstuser and agent_id:
             result = block_ssh_user(agent_id, dstuser)
+    elif cmd == "logout":
+        src_ip = alert.get('data', {}).get('srcip', '')
+        if src_ip and agent_id:
+            result = logout_ssh(agent_id, src_ip)
+            print(result)
     else:
         print(f"Unknown command: {cmd}")
 
@@ -264,6 +269,29 @@ def block_ssh_user(agent_id, username):
     
     return response.status_code == 200
 
+def logout_ssh(agent_id, src_ip):
+    token = get_wazuh_token()
+    if not token:
+        return False
+    
+    payload = {
+        "command": "!logout-ssh",
+        "alert": {
+            "data": {
+                "srcip": src_ip
+            }
+        }
+    }
+    
+    response = requests.put(
+        f"{WAZUH_MANAGER_URL}/active-response",
+        params={"agents_list": agent_id},
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        json=payload,
+        verify=False
+    )
+    
+    return response.status_code == 200
 
 if __name__ == '__main__':
     threading.Thread(target=run_bot, daemon=True).start()
