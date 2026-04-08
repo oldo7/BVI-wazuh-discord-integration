@@ -82,7 +82,10 @@ app = Flask(__name__)
 def handle_command(original_msg_id, command):
     alert = alert_store[original_msg_id]
     print(f"Command received: {command}")
-    cmd = command.strip().lower()
+    
+    parts = command.strip().lower().split()
+    cmd = parts[0] 
+    param = parts[1] if len(parts) > 1 else None
     rule_id = alert.get('rule', {}).get('id', '')
 
     username = alert.get('data', {}).get('dstuser', '')
@@ -100,7 +103,13 @@ def handle_command(original_msg_id, command):
 
     if cmd == "block":
         if src_ip and agent_id:
-            result = block_ip(agent_id, src_ip)
+            timeout = 120
+            if param:
+                try:
+                    timeout = int(param) * 60
+                except ValueError:
+                    print("invalid parameter")
+            result = block_ip(agent_id, src_ip, timeout)
     elif cmd == "blockuser":
         dstuser = alert.get('data', {}).get('dstuser', '')
         if dstuser and agent_id:
