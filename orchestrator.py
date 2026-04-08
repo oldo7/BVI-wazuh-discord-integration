@@ -8,6 +8,15 @@ import time
 from dotenv import load_dotenv
 from datetime import datetime
 
+### MAP COMMANDS FOR SPECIFIC EVENTS
+RULE_COMMANDS = {
+    "2502": ["block", "blockuser", "logout", "log"],      # SSH auth failure
+    "5710": ["block", "blockuser", "logout", "log"],      # SSH brute-force
+    "5712": ["block", "blockuser", "logout", "log"],      # SSH brute-force
+    "60109": ["disable", "delete"],           # Windows account creation
+    "550": ["restore", "quarantine"],         # File change
+}
+
 ### DISCORD ###
 # Setup
 load_dotenv()
@@ -73,13 +82,19 @@ app = Flask(__name__)
 # Handle commands from Discord replies
 def handle_command(original_msg_id, command):
     alert = alert_store[original_msg_id]
-    del alert_store[original_msg_id]
     print(f"Command received: {command}")
     cmd = command.strip().lower()
+    rule_id = alert.get('rule', {}).get('id', '')
+
+    # Check if command is allowed for this rule
+    if rule_id not in RULE_COMMANDS or cmd not in RULE_COMMANDS[rule_id]:
+        print(f"Command '{cmd}' not allowed for rule {rule_id}")
+        return
 
     # Extract attacker IP and agent on which the alert occured
     src_ip = alert.get('data', {}).get('srcip', '')
     agent_id = alert.get('agent', {}).get('id', '')
+
     if cmd == "block":
         if src_ip and agent_id:
             result = block_ip(agent_id, src_ip)
@@ -88,12 +103,10 @@ def handle_command(original_msg_id, command):
         if dstuser and agent_id:
             result = block_ssh_user(agent_id, dstuser)
     elif cmd == "logout":
-        src_ip = alert.get('data', {}).get('srcip', '')
         if src_ip and agent_id:
             result = logout_ssh(agent_id, src_ip)
             print(result)
     elif cmd == "log":
-        src_ip = alert.get('data', {}).get('srcip', '')
         if src_ip and agent_id:
             result = log_attacker(agent_id, src_ip)
     else:
@@ -179,11 +192,10 @@ def format_alert(alert):
 @app.route('/webhook', methods=['POST'])
 def webhook():
     alert = request.get_json()
+    rule_id = alert.get('rule', {}).get('id', '')
     
-    # Only process level 7+ alerts (this will be configurable)
-    if alert.get('rule', {}).get('level', 0) >= 7:
+    if rule_id in RULE_COMMANDS:
         message = format_alert(alert)
-        #asyncio.create_task equivalent across threads
         asyncio.run_coroutine_threadsafe(
             send_discord_message(message, alert), 
             bot.loop
