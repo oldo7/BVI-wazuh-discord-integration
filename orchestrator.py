@@ -13,8 +13,7 @@ RULE_COMMANDS = {
     "2502": ["block", "blockuser", "logout", "log"],      # SSH auth failure
     "5710": ["block", "blockuser", "logout", "log"],      # SSH brute-force
     "5712": ["block", "blockuser", "logout", "log"],      # SSH brute-force
-    "60109": ["disable", "delete"],           # Windows account creation
-    "550": ["restore", "quarantine"],         # File change
+    "5902": ["delete", "disable"]
 }
 
 ### DISCORD ###
@@ -86,6 +85,11 @@ def handle_command(original_msg_id, command):
     cmd = command.strip().lower()
     rule_id = alert.get('rule', {}).get('id', '')
 
+    # Extract username for Windows commands (works for both local and remote)
+    username = alert.get('data', {}).get('dstuser', '')  # Linux: user being attacked
+    if not username:
+        username = alert.get('data', {}).get('win', {}).get('eventdata', {}).get('targetUserName', '') 
+
     # Check if command is allowed for this rule
     if rule_id not in RULE_COMMANDS or cmd not in RULE_COMMANDS[rule_id]:
         print(f"Command '{cmd}' not allowed for rule {rule_id}")
@@ -105,10 +109,15 @@ def handle_command(original_msg_id, command):
     elif cmd == "logout":
         if src_ip and agent_id:
             result = logout_ssh(agent_id, src_ip)
-            print(result)
     elif cmd == "log":
         if src_ip and agent_id:
             result = log_attacker(agent_id, src_ip)
+    elif cmd == "disable":
+        if username and agent_id:
+            result = disable_linux_user(agent_id, username)
+    elif cmd == "delete":
+        if username and agent_id:
+            result = delete_linux_user(agent_id, username)
     else:
         print(f"Unknown command: {cmd}")
 
@@ -319,6 +328,54 @@ def log_attacker(agent_id, src_ip):
         "alert": {
             "data": {
                 "srcip": src_ip
+            }
+        }
+    }
+    
+    response = requests.put(
+        f"{WAZUH_MANAGER_URL}/active-response",
+        params={"agents_list": agent_id},
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        json=payload,
+        verify=False
+    )
+    
+    return response.status_code == 200
+
+def disable_linux_user(agent_id, username):
+    token = get_wazuh_token()
+    if not token:
+        return False
+    
+    payload = {
+        "command": "!disable-linux-user",
+        "alert": {
+            "data": {
+                "username": username
+            }
+        }
+    }
+    
+    response = requests.put(
+        f"{WAZUH_MANAGER_URL}/active-response",
+        params={"agents_list": agent_id},
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        json=payload,
+        verify=False
+    )
+    
+    return response.status_code == 200
+
+def delete_linux_user(agent_id, username):
+    token = get_wazuh_token()
+    if not token:
+        return False
+    
+    payload = {
+        "command": "!delete-linux-user",
+        "alert": {
+            "data": {
+                "username": username
             }
         }
     }
