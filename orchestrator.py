@@ -209,7 +209,7 @@ def get_wazuh_token():
         return None
 
 
-def block_ip(agent_id, ip_address):
+def block_ip(agent_id, ip_address, timeout=120):
     token = get_wazuh_token()
     if not token:
         return False
@@ -226,7 +226,8 @@ def block_ip(agent_id, ip_address):
         "command": "!custom-command",
         "alert": {
             "data": {
-                "srcip": ip_address
+                "srcip": ip_address,
+                "timeout": timeout
             }
         }
     }
