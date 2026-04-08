@@ -83,12 +83,10 @@ def handle_command(original_msg_id, command):
     if cmd == "block":
         if src_ip and agent_id:
             result = block_ip(agent_id, src_ip)
-            if result:
-                print(f"Block command executed successfully")
-            else:
-                print(f"Block command failed")
-        else:
-            print(f"Missing source IP or agent ID")
+    elif cmd == "blockuser":
+        dstuser = alert.get('data', {}).get('dstuser', '')
+        if dstuser and agent_id:
+            result = block_ssh_user(agent_id, dstuser)
     else:
         print(f"Unknown command: {cmd}")
 
@@ -240,6 +238,30 @@ def block_ip(agent_id, ip_address, timeout=120):
         verify=False
     )
 
+    return response.status_code == 200
+
+def block_ssh_user(agent_id, username):
+    token = get_wazuh_token()
+    if not token:
+        return False
+    
+    payload = {
+        "command": "!block-ssh-user",
+        "alert": {
+            "data": {
+                "username": username
+            }
+        }
+    }
+    
+    response = requests.put(
+        f"{WAZUH_MANAGER_URL}/active-response",
+        params={"agents_list": agent_id},
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        json=payload,
+        verify=False
+    )
+    
     return response.status_code == 200
 
 
