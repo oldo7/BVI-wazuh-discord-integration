@@ -92,6 +92,10 @@ def handle_command(original_msg_id, command):
         if src_ip and agent_id:
             result = logout_ssh(agent_id, src_ip)
             print(result)
+    elif cmd == "log":
+        src_ip = alert.get('data', {}).get('srcip', '')
+        if src_ip and agent_id:
+            result = log_attacker(agent_id, src_ip)
     else:
         print(f"Unknown command: {cmd}")
 
@@ -276,6 +280,30 @@ def logout_ssh(agent_id, src_ip):
     
     payload = {
         "command": "!logout-ssh",
+        "alert": {
+            "data": {
+                "srcip": src_ip
+            }
+        }
+    }
+    
+    response = requests.put(
+        f"{WAZUH_MANAGER_URL}/active-response",
+        params={"agents_list": agent_id},
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        json=payload,
+        verify=False
+    )
+    
+    return response.status_code == 200
+
+def log_attacker(agent_id, src_ip):
+    token = get_wazuh_token()
+    if not token:
+        return False
+    
+    payload = {
+        "command": "!log-attacker",
         "alert": {
             "data": {
                 "srcip": src_ip
