@@ -83,6 +83,7 @@ def handle_command(original_msg_id, command):
     alert = alert_store[original_msg_id]
     print(f"Command received: {command}")
     
+    # extract parameters
     parts = command.strip().lower().split()
     cmd = parts[0] 
     param = parts[1] if len(parts) > 1 else None
