@@ -1,0 +1,4 @@
+#!/bin/bash
+read INPUT
+echo "$(date) - Custom script triggered. Received parameters: $INPUT" >> /tmp/custom-script.log
+exit 0
