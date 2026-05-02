@@ -1,0 +1,16 @@
+{
+    "rules": {
+        "2502": ["block", "blockuser", "logout", "log"],
+        "5710": ["block", "blockuser", "logout", "log"],
+        "5712": ["block", "blockuser", "logout", "log"],
+        "5902": ["delete", "disable"]
+    },
+    "commands": {
+        "block":     {"script": "custom-command",     "data": "srcip",    "timeout": true},
+        "blockuser": {"script": "block-ssh-user",     "data": "username", "timeout": false},
+        "logout":    {"script": "logout-ssh",         "data": "srcip",    "timeout": false},
+        "log":       {"script": "log-attacker",       "data": "srcip",    "timeout": false},
+        "disable":   {"script": "disable-linux-user", "data": "username", "timeout": false},
+        "delete":    {"script": "delete-linux-user",  "data": "username", "timeout": false}
+    }
+}

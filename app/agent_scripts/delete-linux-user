@@ -1,0 +1,11 @@
+#!/bin/bash
+read INPUT
+
+USERNAME=$(echo "$INPUT" | grep -o '"username":"[^"]*"' | cut -d'"' -f4)
+
+if [ -n "$USERNAME" ]; then
+    userdel -r "$USERNAME"
+    echo "$(date): Deleted user $USERNAME" >> /var/ossec/logs/delete-linux-user.log
+fi
+
+exit 0

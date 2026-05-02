@@ -1,0 +1,12 @@
+#!/bin/bash
+read INPUT
+
+SRCIP=$(echo "$INPUT" | grep -o '"srcip":"[^"]*"' | cut -d'"' -f4)
+
+if [ -n "$SRCIP" ]; then
+    ss -tnp | grep ":22" | grep "$SRCIP" | grep -oP 'pid=\K[0-9]+' | while read pid; do
+        kill "$pid"
+    done
+fi
+
+exit 0

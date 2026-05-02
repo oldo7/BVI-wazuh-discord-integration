@@ -1,0 +1,13 @@
+#!/bin/bash
+read INPUT
+
+USERNAME=$(echo "$INPUT" | grep -o '"username":"[^"]*"' | cut -d'"' -f4)
+
+if [ -n "$USERNAME" ]; then
+    if ! grep -q "^DenyUsers $USERNAME" /etc/ssh/sshd_config; then
+        echo "DenyUsers $USERNAME" >> /etc/ssh/sshd_config
+        systemctl restart sshd
+    fi
+fi
+
+exit 0
