@@ -11,156 +11,145 @@ WAZUH_MANAGER_SSH_HOST = os.getenv('WAZUH_MANAGER_SSH_HOST')
 WAZUH_MANAGER_SSH_USER = os.getenv('WAZUH_MANAGER_SSH_USER', 'root')
 WAZUH_MANAGER_SSH_PASS = os.getenv('WAZUH_MANAGER_SSH_PASSWORD')
 OSSEC_CONF_PATH = '/var/ossec/etc/ossec.conf'
-CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'commands.json')
+AGENT_SCRIPTS_REMOTE = '/var/ossec/active-response/bin/'
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG_PATH = os.path.join(BASE_DIR, 'commands.json')
+AGENTS_PATH = os.path.join(BASE_DIR, 'agents.json')
+SCRIPTS_DIR = os.path.join(BASE_DIR, 'agent_scripts')
 
 # ---------------------------------------------------------------------------
 
-def _ssh_connect():
+def _ssh_connect(host, user, passwd):
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    client.connect(WAZUH_MANAGER_SSH_HOST, username=WAZUH_MANAGER_SSH_USER, password=WAZUH_MANAGER_SSH_PASS, timeout=10)
+    client.connect(host, username=user, password=passwd, timeout=10)
     return client
 
 def _ssh_run(client, cmd):
     _, stdout, stderr = client.exec_command(cmd)
     return stdout.read().decode(), stderr.read().decode()
 
-def read_config():
-    with open(CONFIG_PATH) as f:
-        return json.load(f)
-
-def write_config(config):
-    with open(CONFIG_PATH, 'w') as f:
-        json.dump(config, f, indent=4)
-
-def add_ossec_command(client, name, timeout_allowed):
-    conf, _ = _ssh_run(client, f'cat {OSSEC_CONF_PATH}')
-    if f'<name>{name}</name>' in conf:
-        print(f"  Command '{name}' already in ossec.conf, skipping.")
-        return
-    timeout_line = '    <timeout_allowed>yes</timeout_allowed>\n' if timeout_allowed else ''
-    block = f'\n  <command>\n    <name>{name}</name>\n    <executable>{name}</executable>\n{timeout_line}  </command>\n'
-    pos = conf.rfind('</ossec_config>')
-    new_conf = conf[:pos] + block + conf[pos:]
-    sftp = client.open_sftp()
-    with sftp.open(OSSEC_CONF_PATH, 'w') as f:
-        f.write(new_conf)
-    sftp.close()
-    _ssh_run(client, f'chown root:wazuh {OSSEC_CONF_PATH}')
-    _ssh_run(client, 'systemctl restart wazuh-manager')
-    print(f"  Added '{name}' to ossec.conf and restarted wazuh-manager.")
+def ok(msg):   print(f"  OK: {msg}")
+def info(msg): print(f"  {msg}")
+def err(msg):  print(f"  ERROR: {msg}")
 
 # ---------------------------------------------------------------------------
 
-def menu_alert_mappings():
-    config = read_config()
-    rules = config['rules']
-    commands = config['commands']
-
-    print("\n=== Current alert mappings ===")
-    if not rules:
-        print("  (none)")
-    for rule_id, cmds in rules.items():
-        print(f"  Rule {rule_id}: {', '.join(cmds)}")
-
-    print("\n  1) Add new alert mapping")
-    print("  2) Modify existing alert mapping")
-    print("  3) Back")
-    choice = input("  > ").strip()
-
-    if choice == '1':
-        rule_id = input("  Rule ID: ").strip()
-        if rule_id in rules:
-            print(f"  Rule {rule_id} already exists. Use modify (option 2).")
-            return
-        print(f"  Available commands: {', '.join(commands.keys())}")
-        raw = input("  Commands (comma-separated): ").strip()
-        cmds = [c.strip() for c in raw.split(',') if c.strip() in commands]
-        if not cmds:
-            print("  No valid commands entered.")
-            return
-        rules[rule_id] = cmds
-        write_config(config)
-        print(f"  Added: Rule {rule_id} → {cmds}")
-
-    elif choice == '2':
-        rule_id = input("  Rule ID to modify: ").strip()
-        if rule_id not in rules:
-            print(f"  Rule {rule_id} not found.")
-            return
-        print(f"  Current commands: {', '.join(rules[rule_id])}")
-        print(f"  Available commands: {', '.join(commands.keys())}")
-        raw = input("  New commands (comma-separated): ").strip()
-        cmds = [c.strip() for c in raw.split(',') if c.strip() in commands]
-        if not cmds:
-            print("  No valid commands entered.")
-            return
-        rules[rule_id] = cmds
-        write_config(config)
-        print(f"  Updated: Rule {rule_id} → {cmds}")
-
-
-def menu_add_command():
-    config = read_config()
-
-    print("\n=== Add new command ===")
-    keyword = input("  Discord keyword (what user types in reply): ").strip().lower()
-    if not keyword:
-        return
-    if keyword in config['commands']:
-        print(f"  Command '{keyword}' already exists.")
+def sync_ossec(commands):
+    print("\n[1] Syncing ossec.conf on manager...")
+    try:
+        client = _ssh_connect(WAZUH_MANAGER_SSH_HOST, WAZUH_MANAGER_SSH_USER, WAZUH_MANAGER_SSH_PASS)
+    except Exception as e:
+        err(f"Cannot SSH into manager: {e}")
         return
 
-    script_name = input("  Script name (executable in /var/ossec/active-response/bin/ on agents): ").strip()
-    if not script_name:
-        return
+    conf, _ = _ssh_run(client, f'cat {OSSEC_CONF_PATH}')
+    changed = False
 
-    print("  What data does this command need from the alert?")
-    print("  1) srcip — source IP")
-    print("  2) username — target username")
-    print("  3) both")
-    print("  4) none")
-    data_type = {'1': 'srcip', '2': 'username', '3': 'both', '4': 'none'}.get(input("  > ").strip(), 'none')
+    for cmd_name, cmd_def in commands.items():
+        script = cmd_def['script']
+        timeout = cmd_def.get('timeout', False)
+        if f'<name>{script}</name>' in conf:
+            info(f"Command '{script}' already in ossec.conf, skipping.")
+            continue
+        timeout_line = '    <timeout_allowed>yes</timeout_allowed>\n' if timeout else ''
+        block = f'\n  <command>\n    <name>{script}</name>\n    <executable>{script}</executable>\n{timeout_line}  </command>\n'
+        pos = conf.rfind('</ossec_config>')
+        conf = conf[:pos] + block + conf[pos:]
+        info(f"Added command '{script}'.")
+        changed = True
 
-    timeout = input("  Allow timeout parameter? (y/n): ").strip().lower() == 'y'
+    if changed:
+        sftp = client.open_sftp()
+        with sftp.open(OSSEC_CONF_PATH, 'w') as f:
+            f.write(conf)
+        sftp.close()
+        _ssh_run(client, f'chown root:wazuh {OSSEC_CONF_PATH}')
+        _ssh_run(client, 'systemctl restart wazuh-manager')
+        ok("ossec.conf updated and wazuh-manager restarted.")
+    else:
+        ok("No changes needed.")
 
-    config['commands'][keyword] = {
-        'script': script_name,
-        'data': data_type,
-        'timeout': timeout
-    }
-    write_config(config)
-    print(f"  Added '{keyword}' to commands.json.")
+    client.close()
+
+
+def deploy_scripts(commands):
+    print("\n[2] Deploying agent scripts...")
+
+    scripts = list({cmd_def['script'] for cmd_def in commands.values()})
+
+    missing = [s for s in scripts if not os.path.exists(os.path.join(SCRIPTS_DIR, s))]
+    if missing:
+        err(f"The following scripts are missing from agent_scripts/: {', '.join(missing)}")
+        err("Add them before running configure.py.")
+        sys.exit(1)
 
     try:
-        client = _ssh_connect()
-        add_ossec_command(client, script_name, timeout)
-        client.close()
+        with open(AGENTS_PATH) as f:
+            agents = json.load(f)
     except Exception as e:
-        print(f"  ERROR updating ossec.conf: {e}")
-        timeout_line = '    <timeout_allowed>yes</timeout_allowed>\n' if timeout else ''
-        print(f"  Add this manually to ossec.conf on the manager:")
-        print(f"  <command>\n    <name>{script_name}</name>\n    <executable>{script_name}</executable>\n{timeout_line}  </command>")
+        err(f"Could not read agents.json: {e}")
+        sys.exit(1)
 
-    print(f"\n  Deploy the script to each agent:")
-    print(f"    scp <script> root@<AGENT_IP>:/var/ossec/active-response/bin/{script_name}")
-    print(f"    ssh root@<AGENT_IP> \"chmod 750 /var/ossec/active-response/bin/{script_name} && chown root:wazuh /var/ossec/active-response/bin/{script_name}\"")
+    if not agents:
+        info("No agents in agents.json. Deploy scripts manually:")
+        _print_manual(scripts, ["<AGENT_IP>"])
+        return
+
+    failed = []
+    for agent in agents:
+        ip = agent['ip']
+        user = agent.get('user', 'root')
+        passwd = agent.get('password', '')
+        print(f"\n  Agent {ip}...")
+        try:
+            client = _ssh_connect(ip, user, passwd)
+            sftp = client.open_sftp()
+            for script in scripts:
+                local = os.path.join(SCRIPTS_DIR, script)
+                remote = AGENT_SCRIPTS_REMOTE + script
+                sftp.put(local, remote)
+                _ssh_run(client, f'chmod 750 {remote} && chown root:wazuh {remote}')
+                info(f"Deployed: {script}")
+            sftp.close()
+            client.close()
+            ok(f"Agent {ip} done.")
+        except Exception as e:
+            err(f"Failed to connect to {ip}: {e}")
+            failed.append(ip)
+
+    if failed:
+        print("\n  Deploy manually to failed agents:")
+        _print_manual(scripts, failed)
+
+
+def _print_manual(scripts, ips):
+    for ip in ips:
+        for script in scripts:
+            print(f"    scp agent_scripts/{script} root@{ip}:{AGENT_SCRIPTS_REMOTE}{script}")
+            print(f"    ssh root@{ip} \"chmod 750 {AGENT_SCRIPTS_REMOTE}{script} && chown root:wazuh {AGENT_SCRIPTS_REMOTE}{script}\"")
 
 # ---------------------------------------------------------------------------
 
 def main():
-    print("=== Wazuh-Discord Orchestrator — Configuration ===")
-    while True:
-        print("\n  1) Manage alert-command mappings")
-        print("  2) Add new command")
-        print("  3) Exit")
-        choice = input("  > ").strip()
-        if choice == '1':
-            menu_alert_mappings()
-        elif choice == '2':
-            menu_add_command()
-        elif choice == '3':
-            break
+    print("=== Wazuh-Discord Orchestrator — Configure ===")
+
+    try:
+        with open(CONFIG_PATH) as f:
+            config = json.load(f)
+    except Exception as e:
+        print(f"ERROR: Could not read commands.json: {e}")
+        sys.exit(1)
+
+    commands = config.get('commands', {})
+    if not commands:
+        print("No commands defined in commands.json.")
+        sys.exit(0)
+
+    sync_ossec(commands)
+    deploy_scripts(commands)
+
+    print("\n=== Done ===")
 
 if __name__ == '__main__':
     main()

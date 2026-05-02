@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import os
 import sys
+import json
 import socket
 import requests
 import urllib3
@@ -30,13 +31,21 @@ INTEGRATION_SCRIPT_PATH = '/var/ossec/integrations/custom-webhook'
 AGENT_SCRIPTS_REMOTE  = '/var/ossec/active-response/bin/'
 AGENT_SCRIPTS_LOCAL   = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'agent_scripts')
 
+_agents_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'agents.json')
+try:
+    with open(_agents_path) as _f:
+        AGENT_CREDENTIALS = {a['ip']: a for a in json.load(_f)}
+except Exception:
+    AGENT_CREDENTIALS = {}
+
 COMMANDS = [
-    'custom-command',
+    'block-ip',
     'block-ssh-user',
     'logout-ssh',
     'log-attacker',
     'disable-linux-user',
     'delete-linux-user',
+    'template_script',
 ]
 
 INTEGRATION_SCRIPT_CONTENT = """\
@@ -253,17 +262,7 @@ def handle_agents(token):
     for a in agents:
         print(f"       [{a['id']}] {a['name']}  —  {a.get('ip', 'unknown IP')}")
 
-    print("\n    Deploy scripts via SSH or manually?")
-    print("    1) SSH (automatic)")
-    print("    2) Manual (print instructions)")
-    choice = input("    Enter 1 or 2: ").strip()
-
-    failed = []
-
-    if choice == '1':
-        failed = _deploy_agents_auto(agents)
-    else:
-        failed = agents
+    failed = _deploy_agents_auto(agents)
 
     if failed:
         print("\n    The following agents need scripts deployed manually:")
@@ -272,35 +271,47 @@ def handle_agents(token):
         _print_manual_instructions(failed)
 
 
+def _deploy_agent(agent_ip, user, passwd, scripts):
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    client.connect(agent_ip, username=user, password=passwd, timeout=10)
+    sftp = client.open_sftp()
+    for script in scripts:
+        local = os.path.join(AGENT_SCRIPTS_LOCAL, script)
+        remote = AGENT_SCRIPTS_REMOTE + script
+        if not os.path.exists(local):
+            print(f"      WARNING: {local} not found locally, skipping.")
+            continue
+        sftp.put(local, remote)
+        _ssh_run(client, f"chmod 750 {remote} && chown root:wazuh {remote}")
+        print(f"      Deployed: {script}")
+    sftp.close()
+    client.close()
+
+
 def _deploy_agents_auto(agents):
     failed = []
     for agent in agents:
         agent_ip = agent.get('ip', '')
         print(f"\n    Agent [{agent['id']}] {agent['name']} ({agent_ip})")
-        user = input(f"      SSH user (default: root): ").strip() or 'root'
-        passwd = input(f"      SSH password: ").strip()
+
+        creds = AGENT_CREDENTIALS.get(agent_ip)
+        if creds:
+            user = creds.get('user', 'root')
+            passwd = creds.get('password', '')
+            print(f"      Using credentials from agents.json.")
+        else:
+            print(f"      No credentials found in agents.json.")
+            user = input(f"      SSH user (default: root): ").strip() or 'root'
+            passwd = input(f"      SSH password: ").strip()
 
         try:
-            client = paramiko.SSHClient()
-            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            client.connect(agent_ip, username=user, password=passwd, timeout=10)
-            sftp = client.open_sftp()
-
-            for script in COMMANDS:
-                local = os.path.join(AGENT_SCRIPTS_LOCAL, script)
-                remote = AGENT_SCRIPTS_REMOTE + script
-                if not os.path.exists(local):
-                    print(f"      WARNING: {local} not found locally, skipping.")
-                    continue
-                sftp.put(local, remote)
-                _ssh_run(client, f"chmod 750 {remote} && chown root:wazuh {remote}")
-                print(f"      Deployed: {script}")
-
-            sftp.close()
-            client.close()
+            _deploy_agent(agent_ip, user, passwd, COMMANDS)
             ok(f"Agent {agent['name']} done.")
         except Exception as e:
             print(f"      ERROR connecting to {agent_ip}: {e}")
+            if creds:
+                print(f"      Credentials from agents.json failed. Try manually:")
             failed.append(agent)
 
     return failed

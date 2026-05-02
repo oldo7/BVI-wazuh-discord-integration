@@ -184,6 +184,12 @@ def format_alert(alert):
         message += f"**TTY:** {data['tty']}\n"
 
     message += f"**Details:** {full_log[:300]}\n"
+
+    rule_id = rule.get('id', '')
+    valid_commands = RULE_COMMANDS.get(rule_id, [])
+    if valid_commands:
+        message += f"**Actions:** {', '.join(valid_commands)}\n"
+
     return message
 
 @app.route('/webhook', methods=['POST'])
